@@ -74,12 +74,6 @@ function Index() {
           </div>
         </section>
       )}
-      {data.length === 0 && (
-        <div className="mx-auto max-w-xl px-4 py-24 text-center">
-          <h1 className="text-2xl font-bold">Couldn't load anime right now</h1>
-          <p className="mt-2 text-sm text-muted-foreground">The anime source didn't respond. Try searching above or refresh in a moment.</p>
-        </div>
-      )}
       <div className="mx-auto max-w-7xl pt-4">
         <Row title="Trending Now" subtitle="What everyone is watching today" items={data.slice(0, 16)} />
         <Row title="Popular Series" subtitle="Binge-worthy shows with every episode" items={series} />
