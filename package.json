@@ -1,5 +1,5 @@
 {
-  "name": "tanstack_start_ts",
+  "name": "anisalt",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -11,7 +11,9 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "start": "node .output/server/index.mjs",
+    "build:render": "NITRO_PRESET=node-server vite build"
   },
   "overrides": {
     "rolldown": "1.2.1"
@@ -93,5 +95,8 @@
     "typescript-eslint": "^8.56.1",
     "vite": "8.1.5",
     "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
