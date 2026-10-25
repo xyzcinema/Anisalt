@@ -31,6 +31,32 @@ const abs = (u: string | undefined, base: string) => {
   return u;
 };
 
+
+// ---- External FetchStream API (set ANIME_API_URL in Vercel → Settings → Environment Variables) ----
+const DEFAULT_API = "https://stream-mu-opal.vercel.app";
+function apiBase() {
+  const raw = (process.env["ANIME_API_URL"] || process.env["VITE_ANIME_API_URL"] || DEFAULT_API).trim();
+  // The API's Express routes live at the root, so strip a trailing "/api" or "/".
+  return raw.replace(/\/+$/, "").replace(/\/api$/, "");
+}
+async function api<T>(path: string): Promise<T> {
+  const res = await fetch(apiBase() + path, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return (await res.json()) as T;
+}
+type ApiCard = { title: string; link: string; image: string | null; type: string; source: string };
+const toCard = (c: ApiCard): Card => ({
+  title: c.title, link: c.link, image: c.image ?? null, type: c.type || "series",
+  source: /toon/i.test(c.source) ? "toon" : "salt",
+});
+const apiPrefix = (url: string) => (/toon/i.test(new URL(url).hostname) ? "/toonstream" : "/animesalt");
+const slugTitle = (url: string) =>
+  (new URL(url).pathname.split("/").filter(Boolean).pop() || "").replace(/-/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+async function apiSearch(q: string): Promise<Card[]> {
+  const r = await api<{ results: ApiCard[] }>(`/search?q=${encodeURIComponent(q)}`);
+  return (r.results || []).map(toCard);
+}
+
 function allowed(url: string) {
   const h = new URL(url).hostname;
   return h.endsWith("animesalt.cx") || h.startsWith("toonstream") || h.includes("toon-stream");
@@ -61,10 +87,16 @@ function parseCards($: cheerio.CheerioAPI, base: string, source: Source): Card[]
 export const getHome = createServerFn({ method: "GET" }).handler(async () => {
   try {
     const $ = cheerio.load(await get(SALT + "/"));
-    return parseCards($, SALT, "salt").slice(0, 48);
-  } catch {
-    return [] as Card[];
-  }
+    const cards = parseCards($, SALT, "salt");
+    if (cards.length) return cards.slice(0, 48);
+  } catch { /* fall back to API */ }
+  // Fallback: build the home list from the FetchStream API using popular titles.
+  const picks = ["naruto", "one piece", "dragon ball", "demon slayer", "jujutsu kaisen", "pokemon", "doraemon", "shinchan"];
+  const lists = await Promise.all(picks.map((q) => apiSearch(q).catch(() => [] as Card[])));
+  const seen = new Set<string>();
+  const out: Card[] = [];
+  for (const c of lists.flat()) if (!seen.has(c.link)) { seen.add(c.link); out.push(c); }
+  return out.slice(0, 48);
 });
 
 export const searchAnime = createServerFn({ method: "GET" })
@@ -75,7 +107,8 @@ export const searchAnime = createServerFn({ method: "GET" })
       get(`${SALT}/?s=${q}`).then((h) => parseCards(cheerio.load(h), SALT, "salt")).catch(() => []),
       get(`${TOON}/?s=${q}`).then((h) => parseCards(cheerio.load(h), TOON, "toon")).catch(() => []),
     ]);
-    return [...a, ...b];
+    if (a.length || b.length) return [...a, ...b];
+    return apiSearch(data.q).catch(() => [] as Card[]);
   });
 
 function parseEpisodes($: cheerio.CheerioAPI, base: string): Episode[] {
@@ -99,7 +132,21 @@ export const getSeries = createServerFn({ method: "GET" })
   .handler(async ({ data }) => {
     if (!allowed(data.url)) throw new Error("Unsupported source");
     const base = new URL(data.url).origin;
-    const $ = cheerio.load(await get(data.url));
+    let html: string;
+    try {
+      html = await get(data.url);
+    } catch (e) {
+      const r = await api<{ seasons: { name: string; seasonNum: string; postId?: string }[]; episodes: Episode[] }>(
+        `${apiPrefix(data.url)}/episodes?url=${encodeURIComponent(data.url)}`,
+      ).catch(() => { throw e; });
+      return {
+        title: slugTitle(data.url), overview: "", poster: r.episodes?.[0]?.image ?? null, backdrop: null,
+        genres: [] as string[], isMovie: data.url.includes("/movies/"),
+        seasons: (r.seasons || []).map((x) => ({ name: x.name, seasonNum: x.seasonNum, postId: x.postId ?? "" })),
+        episodes: r.episodes || [],
+      };
+    }
+    const $ = cheerio.load(html);
     const seasons: Season[] = [];
     $(".season-btn").each((_, el) => {
       const s = $(el).attr("data-season");
@@ -140,7 +187,21 @@ export const getStreams = createServerFn({ method: "GET" })
   .handler(async ({ data }) => {
     if (!allowed(data.url)) throw new Error("Unsupported source");
     const base = new URL(data.url).origin;
-    const $ = cheerio.load(await get(data.url));
+    let html: string;
+    try {
+      html = await get(data.url);
+    } catch (e) {
+      const r = await api<{ title: string | null; streams: { server: string; language?: string; link: string }[]; downloads: { server: string; language?: string; quality?: string; link: string }[] }>(
+        `${apiPrefix(data.url)}/streams?url=${encodeURIComponent(data.url)}`,
+      ).catch(() => { throw e; });
+      return {
+        title: r.title || slugTitle(data.url),
+        streams: (r.streams || []).map((x) => ({ server: x.server, language: x.language || "Default", link: x.link })),
+        downloads: (r.downloads || []).map((x) => ({ server: x.server, language: x.language || "Default", quality: x.quality || "HD", link: x.link })),
+        prev: null as string | null, next: null as string | null,
+      };
+    }
+    const $ = cheerio.load(html);
     const streams: Stream[] = [];
     $("iframe").each((_, el) => {
       const src = abs($(el).attr("src") || $(el).attr("data-src"), base);
